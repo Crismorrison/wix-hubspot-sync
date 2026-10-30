@@ -476,28 +476,35 @@ export function normalizeWixFormPayload(rawBody: any) {
         const val = String(rawVal).trim();
         if (!val) continue;
         const cleanKey = rawKey.replace(/^field:/i, '');
+        const baseKey = cleanKey.replace(/_[0-9a-f]{4}$/i, '');
+
+        // Guardar también bajo la clave exacta de Wix (ej. first_name_118d) y su base (ej. first_name)
+        contact[cleanKey] = contact[cleanKey] ?? val;
+        contact[baseKey] = contact[baseKey] ?? val;
 
         if (/utm_source/i.test(cleanKey)) utm.utm_source = utm.utm_source || val;
         else if (/utm_medium/i.test(cleanKey)) utm.utm_medium = utm.utm_medium || val;
         else if (/utm_campaign/i.test(cleanKey)) utm.utm_campaign = utm.utm_campaign || val;
         else if (/utm_term/i.test(cleanKey)) utm.utm_term = utm.utm_term || val;
         else if (/utm_content/i.test(cleanKey)) utm.utm_content = utm.utm_content || val;
-        else if (/^(page_?url|url|origin_?page)$/i.test(cleanKey)) context.page_url = context.page_url || val;
-        else if (/^referrer$/i.test(cleanKey)) context.referrer = context.referrer || val;
-        else if (/email|correo/i.test(cleanKey) || (!contact.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))) {
+        else if (/^(page_?url|url|origin_?page)/i.test(baseKey)) context.page_url = context.page_url || val;
+        else if (/^referrer/i.test(baseKey)) context.referrer = context.referrer || val;
+        else if (/email|correo/i.test(baseKey) || (!contact.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))) {
             contact.email = contact.email || val;
-        } else if (/^(first_?name|nombre|fname)/i.test(cleanKey)) {
+        } else if (/^(first_?name|nombre|fname)/i.test(baseKey)) {
             contact.firstName = contact.firstName || val;
-        } else if (/^(last_?name|apellido|lname)/i.test(cleanKey)) {
+        } else if (/^(last_?name|apellido|lname)/i.test(baseKey)) {
             contact.lastName = contact.lastName || val;
-        } else if (/^(phone|tel|telefono|celular)/i.test(cleanKey)) {
+        } else if (/^(phone|tel|telefono|celular)/i.test(baseKey)) {
             contact.phone = contact.phone || val;
-        } else if (/^(job_?title|cargo|puesto)/i.test(cleanKey)) {
+        } else if (/^(job_?title|position|cargo|puesto)/i.test(baseKey)) {
             contact.jobTitle = contact.jobTitle || val;
-        } else if (/^(company|empresa)/i.test(cleanKey)) {
+        } else if (/^(company|empresa|compania)/i.test(baseKey)) {
             contact.company = contact.company || val;
-        } else {
-            contact[cleanKey] = contact[cleanKey] ?? val;
+        } else if (/^(address|direccion)/i.test(baseKey)) {
+            contact.address = contact.address || val;
+        } else if (/^(additional_?info|message|mensaje|long_?answer|comment)/i.test(baseKey)) {
+            contact.message = contact.message || val;
         }
     }
 
@@ -545,6 +552,9 @@ export async function processWixFormSubmission(
     if (formData.contact.firstName) properties.firstname = formData.contact.firstName.trim();
     if (formData.contact.lastName) properties.lastname = formData.contact.lastName.trim();
     if (formData.contact.phone) properties.phone = formData.contact.phone.trim();
+    if (formData.contact.address) properties.address = formData.contact.address.trim();
+    if (formData.contact.jobTitle) properties.jobtitle = formData.contact.jobTitle.trim();
+    if (formData.contact.company) properties.company = formData.contact.company.trim();
 
     // Aplicar también las reglas dinámicas de Field Mapping para custom fields enviados en el formulario
     for (const m of mappings) {
@@ -564,6 +574,7 @@ export async function processWixFormSubmission(
     if (formData.utm?.utm_content && propSet.has('utm_content')) properties.utm_content = formData.utm.utm_content;
 
     const utmDetails = [
+        formData.contact.message ? `Message: ${formData.contact.message}` : null,
         formData.utm?.utm_source ? `Source: ${formData.utm.utm_source}` : null,
         formData.utm?.utm_medium ? `Medium: ${formData.utm.utm_medium}` : null,
         formData.utm?.utm_campaign ? `Campaign: ${formData.utm.utm_campaign}` : null,
