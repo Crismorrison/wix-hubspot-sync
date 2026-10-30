@@ -18,6 +18,7 @@ import {
     syncHubspotContactToWix,
     processWixFormSubmission,
     syncFromWixLiveContacts,
+    syncFromHubspotLiveContacts,
     runBidirectionalPollSync,
 } from './services/syncEngine';
 
@@ -25,6 +26,7 @@ dotenv.config({ override: true });
 
 const app = express();
 const port = process.env.PORT || 3000;
+let autoSyncEnabled = false; // Inicia desactivado por defecto
 
 // Permitir iframe en Wix Dashboard y peticiones Chrome Private Network Access hacia localhost
 app.use((req, res, next) => {
@@ -453,12 +455,33 @@ app.post('/webhooks/wix/forms', async (req, res) => {
     }
 });
 
-// Trigger live bidirectional poll sync on demand
+// Auto-sync settings (ON/OFF toggle state, starts OFF by default)
+app.get('/api/sync/settings', (_req, res) => {
+    res.json({ autoSyncEnabled });
+});
+
+app.post('/api/sync/settings', (req, res) => {
+    autoSyncEnabled = Boolean(req.body?.enabled);
+    res.json({ success: true, autoSyncEnabled });
+});
+
+// Trigger live contact sync on demand (wix_to_hs, hs_to_wix, or bi)
 app.post('/api/sync/poll', async (req, res) => {
     const instanceId = resolveInstanceId(req);
+    const direction = req.body?.direction || 'bi';
     try {
+        if (direction === 'wix_to_hs') {
+            const wixToHs = await syncFromWixLiveContacts(instanceId);
+            res.json({ success: true, direction, wixToHs });
+            return;
+        }
+        if (direction === 'hs_to_wix') {
+            const hsToWix = await syncFromHubspotLiveContacts(instanceId);
+            res.json({ success: true, direction, hsToWix });
+            return;
+        }
         const result = await runBidirectionalPollSync(instanceId);
-        res.json({ success: true, ...result });
+        res.json({ success: true, direction: 'bi', ...result });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -532,6 +555,15 @@ app.get(['/', '/dashboard'], async (req, res) => {
     .tabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; flex-wrap: wrap; }
     .tab-btn { background: none; border: none; font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; padding: 6px 10px; border-radius: 6px; }
     .tab-btn.active { color: var(--primary); background: #fff0eb; }
+    .toggle-wrap { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+    .switch { position: relative; display: inline-block; width: 38px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; inset: 0; background-color: #cbd5e1; transition: .2s; border-radius: 20px; }
+    .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
+    input:checked + .slider { background-color: var(--success); }
+    input:checked + .slider:before { transform: translateX(18px); }
+    .sync-btn-group { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .sync-btn-group .btn { flex: 1; padding: 8px 10px; font-size: 12px; text-align: center; }
   </style>
 </head>
 <body>
@@ -683,10 +715,28 @@ app.get(['/', '/dashboard'], async (req, res) => {
         </div>
       </div>
 
-      <!-- Section 3: Observability Logs -->
+      <!-- Section 3: Live Contact Sync & Observability Logs -->
       <div class="card">
-        <h2>Anti-Loop Sync Logs</h2>
-        <div id="logs-container" style="max-height: 250px; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px;">
+          <h2 style="margin: 0; border: none; padding: 0;">Live Sync & Anti-Loop Logs</h2>
+          <div class="toggle-wrap">
+            <span id="autosync-label">Auto-Sync (10s): OFF</span>
+            <label class="switch">
+              <input type="checkbox" id="autosync-toggle" onchange="toggleAutoSync(this)">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div id="alert-live-sync" class="alert"></div>
+
+        <div class="sync-btn-group">
+          <button type="button" class="btn btn-secondary" onclick="runLiveSync('wix_to_hs')">Sync Wix → HubSpot</button>
+          <button type="button" class="btn btn-secondary" onclick="runLiveSync('hs_to_wix')">Sync HubSpot → Wix</button>
+          <button type="button" class="btn" onclick="runLiveSync('bi')">Sync Both ↔</button>
+        </div>
+
+        <div id="logs-container" style="max-height: 210px; overflow-y: auto;">
           <p style="color: var(--text-muted); font-size: 13px;">Loading logs...</p>
         </div>
       </div>
@@ -991,8 +1041,80 @@ app.get(['/', '/dashboard'], async (req, res) => {
       setTimeout(() => { box.style.display = 'none'; }, 6000);
     }
 
+    async function loadAutoSyncSettings() {
+      try {
+        const res = await fetch('/api/sync/settings');
+        const data = await res.json();
+        const toggle = document.getElementById('autosync-toggle');
+        const label = document.getElementById('autosync-label');
+        toggle.checked = Boolean(data.autoSyncEnabled);
+        label.innerText = 'Auto-Sync (10s): ' + (toggle.checked ? 'ON' : 'OFF');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function toggleAutoSync(checkbox) {
+      const targetState = checkbox.checked;
+      const msg = targetState
+        ? 'Enable automatic background sync every 10 seconds between Wix and HubSpot?'
+        : 'Disable automatic background sync?';
+
+      if (!confirm(msg)) {
+        checkbox.checked = !targetState;
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/sync/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: targetState })
+        });
+        const data = await res.json();
+        const label = document.getElementById('autosync-label');
+        label.innerText = 'Auto-Sync (10s): ' + (data.autoSyncEnabled ? 'ON' : 'OFF');
+        showAlert('alert-live-sync', '✓ Auto-Sync is now ' + (data.autoSyncEnabled ? 'ENABLED (every 10s)' : 'DISABLED') + '.', 'success');
+      } catch (err) {
+        checkbox.checked = !targetState;
+        showAlert('alert-live-sync', 'Failed to update Auto-Sync setting.', 'danger');
+      }
+    }
+
+    async function runLiveSync(direction) {
+      showAlert('alert-live-sync', 'Syncing live contacts...', 'success');
+      try {
+        const res = await fetch('/api/sync/poll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceId, direction })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showAlert('alert-live-sync', 'Error: ' + (data.error || 'Sync failed'), 'danger');
+          return;
+        }
+
+        if (direction === 'wix_to_hs') {
+          const s = data.wixToHs || { synced: [], skippedCount: 0 };
+          showAlert('alert-live-sync', '✓ Wix → HubSpot: ' + s.synced.length + ' synced, ' + s.skippedCount + ' skipped (idempotent).', 'success');
+        } else if (direction === 'hs_to_wix') {
+          const s = data.hsToWix || { synced: [], skippedCount: 0 };
+          showAlert('alert-live-sync', '✓ HubSpot → Wix: ' + s.synced.length + ' synced, ' + s.skippedCount + ' skipped (idempotent).', 'success');
+        } else {
+          const w = data.wixToHs || { synced: [], skippedCount: 0 };
+          const h = data.hsToWix || { synced: [], skippedCount: 0 };
+          showAlert('alert-live-sync', '✓ Bi-Directional Sync: Wix→HS (' + w.synced.length + ' synced, ' + w.skippedCount + ' skipped) | HS→Wix (' + h.synced.length + ' synced, ' + h.skippedCount + ' skipped).', 'success');
+        }
+        loadLogs();
+      } catch (err) {
+        showAlert('alert-live-sync', 'Connection error while syncing contacts.', 'danger');
+      }
+    }
+
     (async () => {
       await loadStatus();
+      await loadAutoSyncSettings();
       await loadProperties();
       await loadMappings();
       await loadLogs();
@@ -1013,7 +1135,7 @@ async function startServer() {
             const pollInstanceId = process.env.WIX_SITE_ID || 'default-wix-instance';
             let isSyncing = false;
             const runAutoSync = async () => {
-                if (isSyncing) return;
+                if (!autoSyncEnabled || isSyncing) return;
                 isSyncing = true;
                 try {
                     const res = await runBidirectionalPollSync(pollInstanceId);
@@ -1030,7 +1152,6 @@ async function startServer() {
                 }
             };
 
-            setTimeout(runAutoSync, 3000);
             setInterval(runAutoSync, 10000);
         });
     } catch (error) {
