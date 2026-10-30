@@ -86,10 +86,18 @@ function unwrapWixWebhook(req: express.Request): { instanceId: string; payload: 
 
     const innerEvent = typeof body?.event === 'string' ? (() => { try { return JSON.parse(body.event); } catch { return body.event; } })() : body?.event;
     const entity =
+        body?.createdEvent?.entity ||
+        body?.updatedEvent?.currentEntity ||
+        body?.submission ||
         body?.contact ||
         body?.entity ||
+        body?.data?.createdEvent?.entity ||
+        body?.data?.updatedEvent?.currentEntity ||
+        body?.data?.submission ||
         body?.data?.contact ||
         body?.data?.entity ||
+        innerEvent?.createdEvent?.entity ||
+        innerEvent?.updatedEvent?.currentEntity ||
         innerEvent?.entity ||
         innerEvent?.data ||
         body?.data ||

@@ -459,7 +459,7 @@ export function normalizeWixFormPayload(rawBody: any) {
     const collectEntries = (obj: any) => {
         if (!obj || typeof obj !== 'object') return;
         for (const [k, v] of Object.entries(obj)) {
-            if (['contact', 'utm', 'context', 'data', 'fields', 'submissions'].includes(k) && typeof v === 'object') {
+            if (['contact', 'utm', 'context', 'data', 'fields', 'submissions', 'submission', 'createdEvent', 'updatedEvent', 'entity', 'currentEntity'].includes(k) && typeof v === 'object') {
                 if (Array.isArray(v)) {
                     v.forEach((item) => collectEntries(item));
                 } else {
