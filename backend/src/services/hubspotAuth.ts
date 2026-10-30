@@ -137,7 +137,7 @@ export async function disconnectHubspot(wixInstanceId: string): Promise<void> {
         hubspot_refresh_token = NULL,
         hubspot_token_expires_at = NULL,
         updated_at = NOW()
-    WHERE wix_instance_id = $1;
+    WHERE wix_instance_id = $1 OR wix_instance_id = 'default-wix-instance';
   `;
     await pool.query(query, [wixInstanceId]);
 }

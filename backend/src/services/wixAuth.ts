@@ -79,37 +79,13 @@ export function verifyWixInstance(signedInstance: string): WixInstancePayload | 
  * HubSpot conectado, vincula automáticamente las credenciales de HubSpot a esta instancia real.
  */
 export async function registerWixInstance(instanceId: string): Promise<void> {
-    if (!instanceId || instanceId === 'default-wix-instance') return;
+    if (!instanceId) return;
 
     try {
-        const existing = await pool.query('SELECT * FROM tenants WHERE wix_instance_id = $1', [instanceId]);
-        if (existing.rows.length === 0) {
-            const defaultTenant = await pool.query(
-                'SELECT * FROM tenants WHERE wix_instance_id = $1',
-                ['default-wix-instance']
-            );
-
-            if (defaultTenant.rows.length > 0 && defaultTenant.rows[0].hubspot_refresh_token) {
-                const dt = defaultTenant.rows[0];
-                await pool.query(
-                    `INSERT INTO tenants (wix_instance_id, hubspot_portal_id, hubspot_access_token, hubspot_refresh_token, hubspot_token_expires_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())
-           ON CONFLICT (wix_instance_id) DO NOTHING`,
-                    [
-                        instanceId,
-                        dt.hubspot_portal_id,
-                        dt.hubspot_access_token,
-                        dt.hubspot_refresh_token,
-                        dt.hubspot_token_expires_at,
-                    ]
-                );
-            } else {
-                await pool.query(
-                    `INSERT INTO tenants (wix_instance_id, updated_at) VALUES ($1, NOW()) ON CONFLICT (wix_instance_id) DO NOTHING`,
-                    [instanceId]
-                );
-            }
-        }
+        await pool.query(
+            `INSERT INTO tenants (wix_instance_id, updated_at) VALUES ($1, NOW()) ON CONFLICT (wix_instance_id) DO NOTHING`,
+            [instanceId]
+        );
     } catch (err: any) {
         console.warn('[WixAuth] Error al registrar instancia de Wix:', err.message);
     }

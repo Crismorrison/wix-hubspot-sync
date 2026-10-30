@@ -289,20 +289,10 @@ app.get('/auth/hubspot/status', async (req, res) => {
     try {
         await registerWixInstance(instanceId);
 
-        let result = await pool.query(
+        const result = await pool.query(
             'SELECT wix_instance_id, hubspot_portal_id, hubspot_token_expires_at, wix_access_token FROM tenants WHERE wix_instance_id = $1',
             [instanceId]
         );
-
-        // Si esta instancia aún no tiene HubSpot pero default-wix-instance sí, consultar fallback
-        if (result.rows.length === 0 || !result.rows[0].hubspot_portal_id) {
-            const fallback = await pool.query(
-                "SELECT wix_instance_id, hubspot_portal_id, hubspot_token_expires_at, wix_access_token FROM tenants WHERE hubspot_portal_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1"
-            );
-            if (fallback.rows.length > 0) {
-                result = fallback;
-            }
-        }
 
         const wixToken = await getValidWixToken(instanceId);
 
