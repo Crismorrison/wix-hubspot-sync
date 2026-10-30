@@ -12,6 +12,7 @@ import {
     exchangeWixCode,
     registerWixInstance,
     getValidWixToken,
+    fetchWixContactById,
 } from './services/wixAuth';
 import {
     syncWixContactToHubSpot,
@@ -53,7 +54,7 @@ app.use(express.text({ type: ['text/*', 'application/jwt'] }));
 /**
  * Decodifica webhooks nativos de Wix Dev Center (formato JWT firmado o JSON envolvente).
  */
-function unwrapWixWebhook(req: express.Request): { instanceId: string; payload: any } {
+function unwrapWixWebhook(req: express.Request): { instanceId: string; payload: any; entityId?: string } {
     let body: any = req.body;
 
     if (typeof body === 'string') {
@@ -103,13 +104,22 @@ function unwrapWixWebhook(req: express.Request): { instanceId: string; payload: 
         body?.data ||
         body;
 
+    const entityId =
+        entity?.id ||
+        entity?._id ||
+        body?.entityId ||
+        body?.contactId ||
+        body?.data?.entityId ||
+        body?.data?.contactId ||
+        innerEvent?.entityId;
+
     const instanceId =
         body?.instanceId ||
         body?.data?.instanceId ||
         innerEvent?.instanceId ||
         resolveInstanceId(req);
 
-    return { instanceId, payload: entity };
+    return { instanceId, payload: entity, entityId };
 }
 
 /**
@@ -458,8 +468,17 @@ app.post('/api/mappings', async (req, res) => {
 
 // Outbound: Wix Contact event -> HubSpot
 app.post('/webhooks/wix/contacts', async (req, res) => {
-    const { instanceId, payload: contact } = unwrapWixWebhook(req);
+    const { instanceId, payload, entityId } = unwrapWixWebhook(req);
     await registerWixInstance(instanceId);
+
+    let contact = payload;
+    const hasFields = contact && (contact.info || contact.email || contact.firstName || contact.lastName || contact.primaryInfo);
+    if (!hasFields && entityId) {
+        const fetched = await fetchWixContactById(instanceId, String(entityId));
+        if (fetched) {
+            contact = fetched;
+        }
+    }
 
     if (!contact || (!contact.id && !contact._id)) {
         res.status(200).json({ skipped: true, reason: 'Webhook verification or non-contact event.' });
@@ -521,9 +540,19 @@ app.post('/webhooks/hubspot', async (req, res) => {
 
 // Feature #2: Wix Form Submissions with UTM Attribution
 app.post('/webhooks/wix/forms', async (req, res) => {
-    const { instanceId, payload } = unwrapWixWebhook(req);
+    const { instanceId, payload, entityId } = unwrapWixWebhook(req);
     await registerWixInstance(instanceId);
     const { contact, utm, context } = normalizeWixFormPayload(payload);
+
+    if (!contact.email && (payload?.contactId || entityId)) {
+        const fetched = await fetchWixContactById(instanceId, String(payload?.contactId || entityId));
+        if (fetched) {
+            const emailItem = fetched.info?.emails?.items?.[0]?.email;
+            if (emailItem) contact.email = emailItem;
+            if (!contact.firstName && fetched.info?.name?.first) contact.firstName = fetched.info.name.first;
+            if (!contact.lastName && fetched.info?.name?.last) contact.lastName = fetched.info.name.last;
+        }
+    }
 
     if (!contact || !contact.email) {
         res.status(200).json({ skipped: true, reason: 'No contact email in form webhook payload.' });

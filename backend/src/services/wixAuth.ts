@@ -344,6 +344,37 @@ export async function upsertWixContact(
 }
 
 /**
+ * Obtiene un contacto específico por su ID desde Wix Contacts v4 API.
+ */
+export async function fetchWixContactById(wixInstanceId: string, contactId: string): Promise<any | null> {
+    const wixToken = await getValidWixToken(wixInstanceId);
+    if (!wixToken || !contactId) return null;
+
+    const isSiteApiKey = wixToken === process.env.WIX_API_KEY;
+    const headers: Record<string, string> = {
+        Authorization: wixToken,
+        'Content-Type': 'application/json',
+    };
+    if (isSiteApiKey && process.env.WIX_SITE_ID) {
+        headers['wix-site-id'] = process.env.WIX_SITE_ID;
+    }
+    if (isSiteApiKey && process.env.WIX_ACCOUNT_ID) {
+        headers['wix-account-id'] = process.env.WIX_ACCOUNT_ID;
+    }
+
+    try {
+        const res = await axios.get<{ contact: any }>(
+            `https://www.wixapis.com/contacts/v4/contacts/${contactId}`,
+            { headers }
+        );
+        return res.data?.contact || null;
+    } catch (err: any) {
+        console.warn('[WixAPI] Could not fetch contact by ID:', err.response?.data || err.message);
+        return null;
+    }
+}
+
+/**
  * Obtiene los contactos recientes del sitio Wix mediante Wix Contacts v4 API.
  */
 export async function fetchWixContacts(wixInstanceId: string): Promise<any[]> {
