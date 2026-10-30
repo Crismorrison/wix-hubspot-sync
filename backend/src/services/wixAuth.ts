@@ -405,3 +405,66 @@ export async function fetchWixContacts(wixInstanceId: string): Promise<any[]> {
 
     return res.data.contacts || [];
 }
+
+export interface WixContactField {
+    name: string;
+    label: string;
+}
+
+/**
+ * Devuelve los campos estándar de Wix Contacts más los campos extendidos personalizados del sitio.
+ */
+export async function getWixContactFields(wixInstanceId: string): Promise<WixContactField[]> {
+    const standardFields: WixContactField[] = [
+        { name: 'firstName', label: 'First Name' },
+        { name: 'lastName', label: 'Last Name' },
+        { name: 'email', label: 'Email' },
+        { name: 'phone', label: 'Phone Number' },
+        { name: 'jobTitle', label: 'Job Title / Position' },
+        { name: 'company', label: 'Company' },
+        { name: 'address', label: 'Street Address' },
+        { name: 'message', label: 'Notes / Message' },
+        { name: 'utm_source', label: 'UTM Source' },
+        { name: 'utm_medium', label: 'UTM Medium' },
+        { name: 'utm_campaign', label: 'UTM Campaign' },
+        { name: 'utm_term', label: 'UTM Term' },
+        { name: 'utm_content', label: 'UTM Content' },
+    ];
+
+    const wixToken = await getValidWixToken(wixInstanceId);
+    if (!wixToken) return standardFields;
+
+    const isSiteApiKey = wixToken === process.env.WIX_API_KEY;
+    const headers: Record<string, string> = {
+        Authorization: wixToken,
+        'Content-Type': 'application/json',
+    };
+    if (isSiteApiKey && process.env.WIX_SITE_ID) {
+        headers['wix-site-id'] = process.env.WIX_SITE_ID;
+    }
+    if (isSiteApiKey && process.env.WIX_ACCOUNT_ID) {
+        headers['wix-account-id'] = process.env.WIX_ACCOUNT_ID;
+    }
+
+    try {
+        const res = await axios.post<{ extendedFields?: Array<{ key: string; displayName: string; namespace?: string }> }>(
+            'https://www.wixapis.com/contacts/v4/extended-fields/query',
+            { query: { paging: { limit: 100 } } },
+            { headers }
+        );
+        const existingNames = new Set(standardFields.map((f) => f.name));
+        for (const ef of res.data?.extendedFields || []) {
+            if (ef.key && ef.namespace === 'custom' && !existingNames.has(ef.key)) {
+                standardFields.push({
+                    name: ef.key,
+                    label: `${ef.displayName || ef.key} (Custom)`,
+                });
+                existingNames.add(ef.key);
+            }
+        }
+    } catch {
+        // Fallback silencioso a standardFields si la app no tiene permiso de extended-fields
+    }
+
+    return standardFields;
+}

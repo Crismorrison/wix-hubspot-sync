@@ -13,6 +13,7 @@ import {
     registerWixInstance,
     getValidWixToken,
     fetchWixContactById,
+    getWixContactFields,
 } from './services/wixAuth';
 import {
     syncWixContactToHubSpot,
@@ -357,6 +358,17 @@ app.post('/api/hubspot/credentials', (req, res) => {
     process.env.HUBSPOT_CLIENT_ID = String(clientId).trim();
     process.env.HUBSPOT_CLIENT_SECRET = String(clientSecret).trim();
     res.json({ success: true, clientId: process.env.HUBSPOT_CLIENT_ID });
+});
+
+// Get Wix contact fields (standard + custom extended fields)
+app.get('/api/wix/fields', async (req, res) => {
+    const instanceId = resolveInstanceId(req);
+    try {
+        const fields = await getWixContactFields(instanceId);
+        res.json({ count: fields.length, fields });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // Get HubSpot contact properties
@@ -887,6 +899,21 @@ app.get(['/', '/dashboard'], async (req, res) => {
   </div>
 
   <script>
+    let wixFields = [
+      { name: 'firstName', label: 'First Name' },
+      { name: 'lastName', label: 'Last Name' },
+      { name: 'email', label: 'Email' },
+      { name: 'phone', label: 'Phone Number' },
+      { name: 'jobTitle', label: 'Job Title / Position' },
+      { name: 'company', label: 'Company' },
+      { name: 'address', label: 'Street Address' },
+      { name: 'message', label: 'Notes / Message' },
+      { name: 'utm_source', label: 'UTM Source' },
+      { name: 'utm_medium', label: 'UTM Medium' },
+      { name: 'utm_campaign', label: 'UTM Campaign' },
+      { name: 'utm_term', label: 'UTM Term' },
+      { name: 'utm_content', label: 'UTM Content' }
+    ];
     let hubspotProperties = [];
     const instanceId = ${JSON.stringify(activeInstanceId)};
 
@@ -1010,6 +1037,16 @@ app.get(['/', '/dashboard'], async (req, res) => {
 
     async function loadProperties() {
       try {
+        const wixRes = await fetch('/api/wix/fields?instanceId=' + encodeURIComponent(instanceId));
+        const wixData = await wixRes.json();
+        if (wixData.fields && wixData.fields.length > 0) {
+          wixFields = wixData.fields;
+        }
+      } catch (e) {
+        console.warn('Could not load Wix fields:', e);
+      }
+
+      try {
         const res = await fetch('/api/hubspot/properties?instanceId=' + encodeURIComponent(instanceId));
         const data = await res.json();
         if (data.properties) {
@@ -1036,10 +1073,22 @@ app.get(['/', '/dashboard'], async (req, res) => {
       const tbody = document.getElementById('mappings-body');
       const tr = document.createElement('tr');
 
-      const wixField = data.wix_field || '';
-      const hsField = data.hubspot_field || '';
+      const wixField = data.wix_field || 'firstName';
+      const hsField = data.hubspot_field || 'firstname';
       const direction = data.direction || 'bi';
       const transform = data.transform || 'none';
+
+      let wixSelectHtml = '<select class="wix-field">';
+      let foundWix = false;
+      wixFields.forEach(f => {
+        const sel = f.name === wixField ? 'selected' : '';
+        if (f.name === wixField) foundWix = true;
+        wixSelectHtml += '<option value="' + f.name + '" ' + sel + '>' + f.label + ' (' + f.name + ')</option>';
+      });
+      if (!foundWix && wixField) {
+        wixSelectHtml += '<option value="' + wixField + '" selected>' + wixField + '</option>';
+      }
+      wixSelectHtml += '</select>';
 
       let hsSelectHtml = '<select class="hs-field">';
       if (hubspotProperties.length > 0) {
@@ -1053,7 +1102,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
       hsSelectHtml += '</select>';
 
       tr.innerHTML = \`
-        <td><input type="text" class="wix-field" value="\${wixField}" placeholder="e.g. firstName, email, jobTitle"></td>
+        <td>\${wixSelectHtml}</td>
         <td>\${hsSelectHtml}</td>
         <td>
           <select class="direction">
