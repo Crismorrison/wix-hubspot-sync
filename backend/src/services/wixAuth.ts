@@ -156,11 +156,6 @@ export async function exchangeWixCode(code: string, instanceId: string) {
  * Soporta WIX_API_KEY directa, OAuth refresh_token o OAuth2 client_credentials con instance_id.
  */
 export async function getValidWixToken(wixInstanceId: string): Promise<string | null> {
-    if (process.env.WIX_API_KEY) {
-        return process.env.WIX_API_KEY;
-    }
-
-    // Si estamos en 'default-wix-instance', ver si existe WIX_INSTANCE_ID en .env o algún UUID real en BD
     let targetInstanceId = wixInstanceId;
     if (targetInstanceId === 'default-wix-instance') {
         if (process.env.WIX_INSTANCE_ID) {
@@ -209,9 +204,9 @@ export async function getValidWixToken(wixInstanceId: string): Promise<string | 
         }
     }
 
-    // Obtener token mediante OAuth2 Client Credentials de Wix si el instanceId es un UUID válido
+    // Obtener token mediante OAuth2 Client Credentials de Wix si el instanceId es un UUID de App Instance (distinto al WIX_SITE_ID)
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetInstanceId);
-    if (isUuid && process.env.WIX_APP_ID && process.env.WIX_APP_SECRET) {
+    if (isUuid && targetInstanceId !== process.env.WIX_SITE_ID && process.env.WIX_APP_ID && process.env.WIX_APP_SECRET) {
         try {
             const ccRes = await axios.post<{ access_token: string }>(
                 'https://www.wixapis.com/oauth2/token',
@@ -231,9 +226,13 @@ export async function getValidWixToken(wixInstanceId: string): Promise<string | 
                 [targetInstanceId, ccRes.data.access_token, newExpires]
             );
             return ccRes.data.access_token;
-        } catch (err: any) {
-            console.warn('[WixAuth] No se pudo obtener token client_credentials de Wix:', err.response?.data || err.message);
+        } catch {
+            // Si falla client_credentials, usar fallback WIX_API_KEY si existe
         }
+    }
+
+    if (process.env.WIX_API_KEY) {
+        return process.env.WIX_API_KEY;
     }
 
     return null;
@@ -301,14 +300,15 @@ export async function upsertWixContact(
         };
     }
 
+    const isSiteApiKey = wixToken === process.env.WIX_API_KEY;
     const headers: Record<string, string> = {
         Authorization: wixToken,
         'Content-Type': 'application/json',
     };
-    if (process.env.WIX_SITE_ID) {
+    if (isSiteApiKey && process.env.WIX_SITE_ID) {
         headers['wix-site-id'] = process.env.WIX_SITE_ID;
     }
-    if (process.env.WIX_ACCOUNT_ID) {
+    if (isSiteApiKey && process.env.WIX_ACCOUNT_ID) {
         headers['wix-account-id'] = process.env.WIX_ACCOUNT_ID;
     }
 
@@ -374,14 +374,15 @@ export async function fetchWixContacts(wixInstanceId: string): Promise<any[]> {
     const wixToken = await getValidWixToken(wixInstanceId);
     if (!wixToken) return [];
 
+    const isSiteApiKey = wixToken === process.env.WIX_API_KEY;
     const headers: Record<string, string> = {
         Authorization: wixToken,
         'Content-Type': 'application/json',
     };
-    if (process.env.WIX_SITE_ID) {
+    if (isSiteApiKey && process.env.WIX_SITE_ID) {
         headers['wix-site-id'] = process.env.WIX_SITE_ID;
     }
-    if (process.env.WIX_ACCOUNT_ID) {
+    if (isSiteApiKey && process.env.WIX_ACCOUNT_ID) {
         headers['wix-account-id'] = process.env.WIX_ACCOUNT_ID;
     }
 

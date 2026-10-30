@@ -48,6 +48,61 @@ app.use((req, res, next) => {
 
 app.use(cors());
 app.use(express.json());
+app.use(express.text({ type: ['text/*', 'application/jwt'] }));
+
+/**
+ * Decodifica webhooks nativos de Wix Dev Center (formato JWT firmado o JSON envolvente).
+ */
+function unwrapWixWebhook(req: express.Request): { instanceId: string; payload: any } {
+    let body: any = req.body;
+
+    if (typeof body === 'string') {
+        const trimmed = body.trim();
+        const parts = trimmed.split('.');
+        if (parts.length === 3) {
+            try {
+                const decodedJwt = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+                body = typeof decodedJwt.data === 'string' ? JSON.parse(decodedJwt.data) : decodedJwt;
+            } catch {
+                // Fallback
+            }
+        } else {
+            try {
+                body = JSON.parse(trimmed);
+            } catch {
+                body = {};
+            }
+        }
+    }
+
+    if (body && typeof body.data === 'string') {
+        try {
+            const parsedData = JSON.parse(body.data);
+            body = { ...body, ...parsedData };
+        } catch {
+            // Ignore
+        }
+    }
+
+    const innerEvent = typeof body?.event === 'string' ? (() => { try { return JSON.parse(body.event); } catch { return body.event; } })() : body?.event;
+    const entity =
+        body?.contact ||
+        body?.entity ||
+        body?.data?.contact ||
+        body?.data?.entity ||
+        innerEvent?.entity ||
+        innerEvent?.data ||
+        body?.data ||
+        body;
+
+    const instanceId =
+        body?.instanceId ||
+        body?.data?.instanceId ||
+        innerEvent?.instanceId ||
+        resolveInstanceId(req);
+
+    return { instanceId, payload: entity };
+}
 
 /**
  * Resuelve el wix_instance_id validando el parámetro firmado 'instance' de Wix (si está presente)
@@ -198,6 +253,16 @@ app.get('/auth/hubspot/callback', async (req, res) => {
           <p>Portal ID: <strong>${tenant.hubspot_portal_id}</strong> linked to instance: <strong>${tenant.wix_instance_id}</strong></p>
           <a href="/?instanceId=${encodeURIComponent(tenant.wix_instance_id)}" class="btn">Go to Dashboard</a>
         </div>
+        <script>
+          if (window.opener) {
+            window.opener.postMessage({
+              type: 'HUBSPOT_CONNECTED',
+              instanceId: ${JSON.stringify(tenant.wix_instance_id)},
+              portalId: ${JSON.stringify(tenant.hubspot_portal_id)}
+            }, '*');
+            setTimeout(() => window.close(), 600);
+          }
+        </script>
       </body>
       </html>
     `);
@@ -264,6 +329,26 @@ app.post('/auth/hubspot/disconnect', async (req, res) => {
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
+});
+
+// Optional: Configure custom HubSpot OAuth Client ID & Secret from Dashboard UI
+app.get('/api/hubspot/credentials', (_req, res) => {
+    res.json({
+        clientId: process.env.HUBSPOT_CLIENT_ID || '',
+        hasSecret: Boolean(process.env.HUBSPOT_CLIENT_SECRET),
+        redirectUri: process.env.HUBSPOT_REDIRECT_URI || '',
+    });
+});
+
+app.post('/api/hubspot/credentials', (req, res) => {
+    const { clientId, clientSecret } = req.body || {};
+    if (!clientId || !clientSecret) {
+        res.status(400).json({ error: 'Both HubSpot Client ID and Client Secret are required.' });
+        return;
+    }
+    process.env.HUBSPOT_CLIENT_ID = String(clientId).trim();
+    process.env.HUBSPOT_CLIENT_SECRET = String(clientSecret).trim();
+    res.json({ success: true, clientId: process.env.HUBSPOT_CLIENT_ID });
 });
 
 // Get HubSpot contact properties
@@ -375,11 +460,11 @@ app.post('/api/mappings', async (req, res) => {
 
 // Outbound: Wix Contact event -> HubSpot
 app.post('/webhooks/wix/contacts', async (req, res) => {
-    const instanceId = resolveInstanceId(req);
-    const contact = req.body?.contact || req.body?.entity || req.body;
+    const { instanceId, payload: contact } = unwrapWixWebhook(req);
+    await registerWixInstance(instanceId);
 
     if (!contact || (!contact.id && !contact._id)) {
-        res.status(400).json({ error: 'Invalid contact or missing ID.' });
+        res.status(200).json({ skipped: true, reason: 'Webhook verification or non-contact event.' });
         return;
     }
 
@@ -438,11 +523,12 @@ app.post('/webhooks/hubspot', async (req, res) => {
 
 // Feature #2: Wix Form Submissions with UTM Attribution
 app.post('/webhooks/wix/forms', async (req, res) => {
-    const instanceId = resolveInstanceId(req);
-    const { contact, utm, context } = normalizeWixFormPayload(req.body);
+    const { instanceId, payload } = unwrapWixWebhook(req);
+    await registerWixInstance(instanceId);
+    const { contact, utm, context } = normalizeWixFormPayload(payload);
 
     if (!contact || !contact.email) {
-        res.status(400).json({ error: 'Form submission must include contact email.' });
+        res.status(200).json({ skipped: true, reason: 'No contact email in form webhook payload.' });
         return;
     }
 
@@ -573,13 +659,30 @@ app.get(['/', '/dashboard'], async (req, res) => {
       <div>
         <h1>Wix ↔ HubSpot Integration</h1>
       </div>
-      <div id="connection-controls" style="display: flex; align-items: center; gap: 14px;">
+      <div id="connection-controls" style="display: flex; align-items: center; gap: 10px;">
         <span id="status-text" class="status-text status-disconnected">Checking...</span>
+        <button type="button" class="btn btn-secondary" style="padding: 8px 12px; font-size: 13px;" onclick="toggleSettings()">⚙️ Settings</button>
         <button id="btn-auth-action" class="btn">Connect</button>
       </div>
     </div>
 
     <div id="alert-header" class="alert"></div>
+
+    <!-- Collapsible HubSpot OAuth Credentials Settings -->
+    <div id="settings-card" class="card" style="display: none;">
+      <h2>HubSpot OAuth App Settings</h2>
+      <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 220px;">
+          <label style="font-size: 12px; font-weight: 600;">HubSpot Client ID:</label>
+          <input type="text" id="cfg-hs-client-id" placeholder="e.g. e2a1af0e-83eb-...">
+        </div>
+        <div style="flex: 1; min-width: 220px;">
+          <label style="font-size: 12px; font-weight: 600;">HubSpot Client Secret:</label>
+          <input type="password" id="cfg-hs-client-secret" placeholder="Enter Client Secret">
+        </div>
+        <button type="button" class="btn" onclick="saveHubspotCredentials()">Save Credentials</button>
+      </div>
+    </div>
 
     <!-- Section 1: Field Mapping -->
     <div class="card">
@@ -769,6 +872,79 @@ app.get(['/', '/dashboard'], async (req, res) => {
       document.getElementById('tab-btn-form').className = 'tab-btn' + (tab === 'form' ? ' active' : '');
     }
 
+    function toggleSettings() {
+      const card = document.getElementById('settings-card');
+      card.style.display = card.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function loadCredentials() {
+      try {
+        const res = await fetch('/api/hubspot/credentials');
+        const data = await res.json();
+        if (data.clientId) {
+          document.getElementById('cfg-hs-client-id').value = data.clientId;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function saveHubspotCredentials() {
+      const clientId = document.getElementById('cfg-hs-client-id').value.trim();
+      const clientSecret = document.getElementById('cfg-hs-client-secret').value.trim();
+      if (!clientId || !clientSecret) {
+        showAlert('alert-header', 'Please provide both HubSpot Client ID and Client Secret.', 'danger');
+        return;
+      }
+      try {
+        const res = await fetch('/api/hubspot/credentials', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId, clientSecret })
+        });
+        if (res.ok) {
+          showAlert('alert-header', '✓ HubSpot OAuth credentials updated. Click Connect HubSpot to authorize.', 'success');
+          document.getElementById('settings-card').style.display = 'none';
+        } else {
+          const data = await res.json();
+          showAlert('alert-header', 'Error: ' + (data.error || 'Failed to save credentials'), 'danger');
+        }
+      } catch (e) {
+        showAlert('alert-header', 'Connection error saving credentials.', 'danger');
+      }
+    }
+
+    function openHubspotOAuth() {
+      const url = '/auth/hubspot/install?instanceId=' + encodeURIComponent(instanceId);
+      const w = 600, h = 720;
+      const left = (window.screen.width / 2) - (w / 2);
+      const top = (window.screen.height / 2) - (h / 2);
+      const popup = window.open(url, 'HubSpotOAuth', 'width=' + w + ',height=' + h + ',top=' + top + ',left=' + left);
+      if (!popup) {
+        window.location.href = url;
+        return;
+      }
+      const timer = setInterval(async () => {
+        if (popup.closed) {
+          clearInterval(timer);
+          await loadStatus();
+          await loadProperties();
+          await loadMappings();
+          await loadLogs();
+        }
+      }, 1000);
+    }
+
+    window.addEventListener('message', async (event) => {
+      if (event.data && event.data.type === 'HUBSPOT_CONNECTED') {
+        showAlert('alert-header', '✓ Connected to HubSpot Portal ' + event.data.portalId + '!', 'success');
+        await loadStatus();
+        await loadProperties();
+        await loadMappings();
+        await loadLogs();
+      }
+    });
+
     async function loadStatus() {
       try {
         const res = await fetch('/auth/hubspot/status?instanceId=' + encodeURIComponent(instanceId));
@@ -787,7 +963,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
           statusText.innerText = 'Disconnected';
           btn.className = 'btn';
           btn.innerText = 'Connect HubSpot';
-          btn.onclick = () => window.location.href = '/auth/hubspot/install?instanceId=' + encodeURIComponent(instanceId);
+          btn.onclick = openHubspotOAuth;
         }
       } catch (err) {
         console.error(err);
@@ -1135,6 +1311,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
     }
 
     (async () => {
+      await loadCredentials();
       await loadStatus();
       await loadAutoSyncSettings();
       await loadProperties();
