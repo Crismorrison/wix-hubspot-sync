@@ -1009,6 +1009,29 @@ async function startServer() {
         await initDb();
         app.listen(port, () => {
             console.log(`Backend corriendo en http://localhost:${port}`);
+
+            const pollInstanceId = process.env.WIX_SITE_ID || 'default-wix-instance';
+            let isSyncing = false;
+            const runAutoSync = async () => {
+                if (isSyncing) return;
+                isSyncing = true;
+                try {
+                    const res = await runBidirectionalPollSync(pollInstanceId);
+                    if (res.wixToHs.synced.length > 0) {
+                        console.log(`[AutoSync Wix -> HubSpot] ${res.wixToHs.synced.length} contacto(s) sincronizado(s)`);
+                    }
+                    if (res.hsToWix.synced.length > 0) {
+                        console.log(`[AutoSync HubSpot -> Wix] ${res.hsToWix.synced.length} contacto(s) sincronizado(s)`);
+                    }
+                } catch {
+                    // Silencioso si aún no hay conexión activa
+                } finally {
+                    isSyncing = false;
+                }
+            };
+
+            setTimeout(runAutoSync, 3000);
+            setInterval(runAutoSync, 10000);
         });
     } catch (error) {
         console.error('Error al inicializar la base de datos:', error);

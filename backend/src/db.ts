@@ -53,9 +53,14 @@ export async function initDb() {
       wix_contact_id VARCHAR(255),
       hubspot_contact_id VARCHAR(255),
       payload_hash VARCHAR(64) NOT NULL,
+      wix_hash VARCHAR(64),
+      hs_hash VARCHAR(64),
       last_source VARCHAR(20) NOT NULL,
       synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS wix_hash VARCHAR(64);
+    ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS hs_hash VARCHAR(64);
 
     CREATE INDEX IF NOT EXISTS idx_sync_hash ON sync_logs (payload_hash);
     CREATE INDEX IF NOT EXISTS idx_sync_contacts ON sync_logs (wix_contact_id, hubspot_contact_id);

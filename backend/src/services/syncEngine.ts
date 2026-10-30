@@ -116,8 +116,11 @@ function extractWixValue(wixContact: any, fieldName: string): any {
     if (wixContact.info?.extendedFields?.items?.[fieldName] !== undefined) {
         return wixContact.info.extendedFields.items[fieldName];
     }
+    if (wixContact.info?.extendedFields?.items?.[`custom.${fieldName}`] !== undefined) {
+        return wixContact.info.extendedFields.items[`custom.${fieldName}`];
+    }
     if (wixContact.info?.extendedFields?.[fieldName] !== undefined) {
-        return wixContact.info.extendedFields[fieldName];
+        return wixContact.info[fieldName];
     }
     if (wixContact.extendedFields?.[fieldName] !== undefined) {
         return wixContact.extendedFields[fieldName];
@@ -150,11 +153,11 @@ export async function syncWixContactToHubSpot(wixInstanceId: string, wixContact:
         return { status: 'skipped', reason: 'no_mapped_fields_with_values' };
     }
 
-    const payloadHash = calculatePayloadHash(hubspotProperties);
+    const wixHash = calculatePayloadHash(hubspotProperties);
 
     // 1. REGLA ANTI-BUCLE / IDEMPOTENCIA:
     const checkLogQuery = `
-    SELECT id, hubspot_contact_id, payload_hash, last_source, synced_at 
+    SELECT id, hubspot_contact_id, payload_hash, wix_hash, hs_hash, last_source, synced_at 
     FROM sync_logs 
     WHERE wix_contact_id = $1 
     ORDER BY id DESC LIMIT 1
@@ -165,8 +168,8 @@ export async function syncWixContactToHubSpot(wixInstanceId: string, wixContact:
         const prevLog = logCheck.rows[0];
         const elapsedMs = Date.now() - new Date(prevLog.synced_at).getTime();
 
-        // Si el payload es idéntico, abortamos por idempotencia
-        if (prevLog.payload_hash === payloadHash) {
+        // Si el estado en Wix es idéntico al último sincronizado, abortamos por idempotencia
+        if ((prevLog.wix_hash && prevLog.wix_hash === wixHash) || prevLog.payload_hash === wixHash) {
             return {
                 status: 'skipped',
                 reason: 'idempotent_identical_payload',
@@ -283,11 +286,32 @@ export async function syncWixContactToHubSpot(wixInstanceId: string, wixContact:
         action = 'created';
     }
 
+    // Calcular el hash resultante en HubSpot para evitar rebotes en el polling inverso
+    let hsHash = wixHash;
+    try {
+        const hsMappings = await getActiveMappings(wixInstanceId, 'hs_to_wix');
+        const propNames = Array.from(new Set(['email', 'firstname', 'lastname', 'phone', ...hsMappings.map((m) => m.hubspot_field)])).join(',');
+        const hsSnapshot = await axios.get<{ properties: Record<string, any> }>(
+            `https://api.hubapi.com/crm/v3/objects/contacts/${hubspotContactId}?properties=${encodeURIComponent(propNames)}`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const canonicalHs: Record<string, any> = {};
+        for (const m of hsMappings) {
+            const val = hsSnapshot.data.properties?.[m.hubspot_field];
+            if (val !== undefined && val !== null && val !== '') {
+                canonicalHs[m.hubspot_field] = applyTransform(val, m.transform);
+            }
+        }
+        hsHash = calculatePayloadHash(canonicalHs);
+    } catch {
+        // Fallback a wixHash
+    }
+
     // 4. Registrar en sync_logs marcando la última fuente como 'wix'
     await pool.query(
-        `INSERT INTO sync_logs (wix_instance_id, wix_contact_id, hubspot_contact_id, payload_hash, last_source)
-     VALUES ($1, $2, $3, $4, 'wix')`,
-        [wixInstanceId, wixContactId, hubspotContactId, payloadHash]
+        `INSERT INTO sync_logs (wix_instance_id, wix_contact_id, hubspot_contact_id, payload_hash, wix_hash, hs_hash, last_source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'wix')`,
+        [wixInstanceId, wixContactId, hubspotContactId, wixHash, wixHash, hsHash]
     );
 
     return {
@@ -342,11 +366,11 @@ export async function syncHubspotContactToWix(
         return { status: 'skipped', reason: 'no_mapped_fields_with_values' };
     }
 
-    const payloadHash = calculatePayloadHash(canonicalProps);
+    const hsHash = calculatePayloadHash(canonicalProps);
 
     // 1. REGLA ANTI-BUCLE / IDEMPOTENCIA:
     const checkLogQuery = `
-    SELECT id, wix_contact_id, payload_hash, last_source, synced_at 
+    SELECT id, wix_contact_id, payload_hash, wix_hash, hs_hash, last_source, synced_at 
     FROM sync_logs 
     WHERE hubspot_contact_id = $1 
     ORDER BY id DESC LIMIT 1
@@ -360,8 +384,8 @@ export async function syncHubspotContactToWix(
         const hasLiveWixToken = Boolean(await getValidWixToken(wixInstanceId));
         const wasLocalOnly = String(prevLog.wix_contact_id || '').startsWith('wix_local_');
 
-        // Si el hash es idéntico (y no estamos pasando de modo local a API real), es idempotente
-        if (prevLog.payload_hash === payloadHash && !(wasLocalOnly && hasLiveWixToken)) {
+        // Si el hash de HubSpot es idéntico al último sincronizado, es idempotente
+        if (((prevLog.hs_hash && prevLog.hs_hash === hsHash) || prevLog.payload_hash === hsHash) && !(wasLocalOnly && hasLiveWixToken)) {
             return {
                 status: 'skipped',
                 reason: 'idempotent_identical_payload',
@@ -387,11 +411,25 @@ export async function syncHubspotContactToWix(
     // 2. Sincronizar hacia Wix Contacts v4 API
     const wixResult = await upsertWixContact(wixInstanceId, existingWixContactId, wixData);
 
+    // Calcular el hash resultante en Wix para evitar rebotes en el polling inverso
+    let wixHash = hsHash;
+    if (wixResult.contact) {
+        const wixToHsMappings = await getActiveMappings(wixInstanceId, 'wix_to_hs');
+        const canonicalWix: Record<string, any> = {};
+        for (const m of wixToHsMappings) {
+            const val = extractWixValue(wixResult.contact, m.wix_field);
+            if (val !== undefined && val !== null && val !== '') {
+                canonicalWix[m.hubspot_field] = applyTransform(val, m.transform);
+            }
+        }
+        wixHash = calculatePayloadHash(canonicalWix);
+    }
+
     // 3. Registrar en sync_logs marcando last_source = 'hubspot'
     await pool.query(
-        `INSERT INTO sync_logs (wix_instance_id, wix_contact_id, hubspot_contact_id, payload_hash, last_source)
-     VALUES ($1, $2, $3, $4, 'hubspot')`,
-        [wixInstanceId, wixResult.wixContactId, hubspotContactId, payloadHash]
+        `INSERT INTO sync_logs (wix_instance_id, wix_contact_id, hubspot_contact_id, payload_hash, wix_hash, hs_hash, last_source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'hubspot')`,
+        [wixInstanceId, wixResult.wixContactId, hubspotContactId, hsHash, wixHash, hsHash]
     );
 
     return {
@@ -567,7 +605,7 @@ export async function syncFromHubspotLiveContacts(wixInstanceId: string) {
     const accessToken = await getValidHubspotToken(wixInstanceId);
 
     const hsRes = await axios.get<{ results: Array<{ id: string; properties: Record<string, any> }> }>(
-        `https://api.hubapi.com/crm/v3/objects/contacts?limit=25&properties=${encodeURIComponent(propNames)}`,
+        `https://api.hubapi.com/crm/v3/objects/contacts?limit=50&properties=${encodeURIComponent(propNames)}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
     );
 
@@ -594,6 +632,16 @@ export async function syncFromHubspotLiveContacts(wixInstanceId: string) {
  * Ejecuta un ciclo completo de sincronización bidireccional automática (Wix <-> HubSpot).
  */
 export async function runBidirectionalPollSync(wixInstanceId: string) {
+    const activeCheck = await pool.query(
+        'SELECT wix_instance_id FROM tenants WHERE hubspot_refresh_token IS NOT NULL ORDER BY updated_at DESC LIMIT 1'
+    );
+    if (activeCheck.rows.length === 0) {
+        return {
+            wixToHs: { totalChecked: 0, synced: [], skippedCount: 0 },
+            hsToWix: { totalChecked: 0, synced: [], skippedCount: 0 },
+        };
+    }
+
     const wixToHs = await syncFromWixLiveContacts(wixInstanceId);
     const hsToWix = await syncFromHubspotLiveContacts(wixInstanceId);
     return { wixToHs, hsToWix };

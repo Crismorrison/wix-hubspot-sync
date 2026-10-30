@@ -289,7 +289,7 @@ export async function upsertWixContact(
     wixInstanceId: string,
     existingWixContactId: string | null,
     wixData: Record<string, any>
-): Promise<{ wixContactId: string; action: 'created' | 'updated'; liveApi: boolean }> {
+): Promise<{ wixContactId: string; action: 'created' | 'updated'; liveApi: boolean; contact?: any }> {
     const wixToken = await getValidWixToken(wixInstanceId);
     const infoPayload = buildWixContactInfo(wixData);
 
@@ -351,19 +351,19 @@ export async function upsertWixContact(
     }
 
     if (targetContactId && currentRevision !== undefined) {
-        await axios.patch(
+        const patchRes = await axios.patch<{ contact: any }>(
             `https://www.wixapis.com/contacts/v4/contacts/${targetContactId}?revision=${currentRevision}`,
             { info: infoPayload },
             { headers }
         );
-        return { wixContactId: targetContactId, action: 'updated', liveApi: true };
+        return { wixContactId: targetContactId, action: 'updated', liveApi: true, contact: patchRes.data?.contact };
     } else {
-        const createRes = await axios.post<{ contact: { id: string } }>(
+        const createRes = await axios.post<{ contact: any }>(
             'https://www.wixapis.com/contacts/v4/contacts',
             { info: infoPayload, allowDuplicates: false },
             { headers }
         );
-        return { wixContactId: createRes.data.contact.id, action: 'created', liveApi: true };
+        return { wixContactId: createRes.data.contact.id, action: 'created', liveApi: true, contact: createRes.data?.contact };
     }
 }
 
@@ -389,7 +389,7 @@ export async function fetchWixContacts(wixInstanceId: string): Promise<any[]> {
         'https://www.wixapis.com/contacts/v4/contacts/query',
         {
             query: {
-                paging: { limit: 25 },
+                paging: { limit: 50 },
             },
         },
         { headers }
