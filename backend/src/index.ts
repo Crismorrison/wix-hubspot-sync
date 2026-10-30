@@ -17,6 +17,7 @@ import {
     syncWixContactToHubSpot,
     syncHubspotContactToWix,
     processWixFormSubmission,
+    normalizeWixFormPayload,
     syncFromWixLiveContacts,
     syncFromHubspotLiveContacts,
     runBidirectionalPollSync,
@@ -438,7 +439,7 @@ app.post('/webhooks/hubspot', async (req, res) => {
 // Feature #2: Wix Form Submissions with UTM Attribution
 app.post('/webhooks/wix/forms', async (req, res) => {
     const instanceId = resolveInstanceId(req);
-    const { contact, utm, context } = req.body || {};
+    const { contact, utm, context } = normalizeWixFormPayload(req.body);
 
     if (!contact || !contact.email) {
         res.status(400).json({ error: 'Form submission must include contact email.' });
@@ -689,9 +690,15 @@ app.get(['/', '/dashboard'], async (req, res) => {
         <!-- Tab 3: Form Simulator (UTMs) -->
         <div id="tab-form" style="display: none;">
           <form id="form-lead-test" onsubmit="submitLead(event)">
-            <div style="margin-bottom: 8px;">
-              <label style="font-size: 12px; font-weight: 600;">Email:</label>
-              <input type="email" id="lead-email" value="lead.test@example.com" required>
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <div style="flex: 1;">
+                <label style="font-size: 12px; font-weight: 600;">Email:</label>
+                <input type="email" id="lead-email" value="lead.test@example.com" required>
+              </div>
+              <div style="flex: 1;">
+                <label style="font-size: 12px; font-weight: 600;">Custom Field (jobTitle):</label>
+                <input type="text" id="lead-jobtitle" value="Marketing Director">
+              </div>
             </div>
             <div style="display: flex; gap: 8px; margin-bottom: 8px;">
               <div style="flex: 1;">
@@ -703,11 +710,17 @@ app.get(['/', '/dashboard'], async (req, res) => {
                 <input type="text" id="lead-last" value="Vazquez">
               </div>
             </div>
-            <div style="margin-bottom: 12px;">
-              <label style="font-size: 12px; font-weight: 600;">UTM Campaign / Source:</label>
-              <div style="display: flex; gap: 8px;">
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 12px; font-weight: 600;">UTM Attribution (Source / Medium / Campaign / Term / Content):</label>
+              <div style="display: flex; gap: 6px; margin-bottom: 6px;">
                 <input type="text" id="lead-utm-source" placeholder="utm_source" value="google">
+                <input type="text" id="lead-utm-medium" placeholder="utm_medium" value="cpc">
                 <input type="text" id="lead-utm-campaign" placeholder="utm_campaign" value="summer_promo">
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <input type="text" id="lead-utm-term" placeholder="utm_term" value="crm_sync">
+                <input type="text" id="lead-utm-content" placeholder="utm_content" value="hero_banner">
+                <input type="text" id="lead-referrer" placeholder="referrer" value="https://www.google.com">
               </div>
             </div>
             <button type="submit" class="btn" style="width: 100%;">Send Wix Form to HubSpot</button>
@@ -975,8 +988,13 @@ app.get(['/', '/dashboard'], async (req, res) => {
       const email = document.getElementById('lead-email').value;
       const firstName = document.getElementById('lead-first').value;
       const lastName = document.getElementById('lead-last').value;
+      const jobTitle = document.getElementById('lead-jobtitle').value;
       const utm_source = document.getElementById('lead-utm-source').value;
+      const utm_medium = document.getElementById('lead-utm-medium').value;
       const utm_campaign = document.getElementById('lead-utm-campaign').value;
+      const utm_term = document.getElementById('lead-utm-term').value;
+      const utm_content = document.getElementById('lead-utm-content').value;
+      const referrer = document.getElementById('lead-referrer').value;
 
       try {
         const res = await fetch('/webhooks/wix/forms', {
@@ -984,9 +1002,13 @@ app.get(['/', '/dashboard'], async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             instanceId,
-            contact: { email, firstName, lastName },
-            utm: { utm_source, utm_campaign, utm_medium: 'cpc' },
-            context: { page_url: 'https://mysite.wixsite.com/promo', timestamp: new Date().toISOString() }
+            contact: { email, firstName, lastName, jobTitle },
+            utm: { utm_source, utm_medium, utm_campaign, utm_term, utm_content },
+            context: {
+              page_url: 'https://dev-sitex1349950157.wix-development-sites.org/',
+              referrer,
+              timestamp: new Date().toISOString()
+            }
           })
         });
         const data = await res.json();

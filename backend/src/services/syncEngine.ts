@@ -443,8 +443,70 @@ export async function syncHubspotContactToWix(
 }
 
 /**
+ * Normaliza cualquier payload de formulario (desde Wix Automations Webhook, Wix Velo o Dashboard UI)
+ * extrayendo contacto, campos personalizados, parámetros UTM y metadatos de contexto.
+ */
+export function normalizeWixFormPayload(rawBody: any) {
+    const root = rawBody?.data && typeof rawBody.data === 'object' ? { ...rawBody, ...rawBody.data } : rawBody || {};
+    const contact: Record<string, any> = { ...(root.contact || {}) };
+    const utm: Record<string, any> = { ...(root.utm || {}) };
+    const context: Record<string, any> = {
+        timestamp: new Date().toISOString(),
+        ...(root.context || {}),
+    };
+
+    const flatEntries: Array<[string, any]> = [];
+    const collectEntries = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        for (const [k, v] of Object.entries(obj)) {
+            if (['contact', 'utm', 'context', 'data', 'fields', 'submissions'].includes(k) && typeof v === 'object') {
+                if (Array.isArray(v)) {
+                    v.forEach((item) => collectEntries(item));
+                } else {
+                    collectEntries(v);
+                }
+            } else if (v !== undefined && v !== null && typeof v !== 'object') {
+                flatEntries.push([k, v]);
+            }
+        }
+    };
+    collectEntries(root);
+
+    for (const [rawKey, rawVal] of flatEntries) {
+        const val = String(rawVal).trim();
+        if (!val) continue;
+        const cleanKey = rawKey.replace(/^field:/i, '');
+
+        if (/utm_source/i.test(cleanKey)) utm.utm_source = utm.utm_source || val;
+        else if (/utm_medium/i.test(cleanKey)) utm.utm_medium = utm.utm_medium || val;
+        else if (/utm_campaign/i.test(cleanKey)) utm.utm_campaign = utm.utm_campaign || val;
+        else if (/utm_term/i.test(cleanKey)) utm.utm_term = utm.utm_term || val;
+        else if (/utm_content/i.test(cleanKey)) utm.utm_content = utm.utm_content || val;
+        else if (/^(page_?url|url|origin_?page)$/i.test(cleanKey)) context.page_url = context.page_url || val;
+        else if (/^referrer$/i.test(cleanKey)) context.referrer = context.referrer || val;
+        else if (/email|correo/i.test(cleanKey) || (!contact.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))) {
+            contact.email = contact.email || val;
+        } else if (/^(first_?name|nombre|fname)/i.test(cleanKey)) {
+            contact.firstName = contact.firstName || val;
+        } else if (/^(last_?name|apellido|lname)/i.test(cleanKey)) {
+            contact.lastName = contact.lastName || val;
+        } else if (/^(phone|tel|telefono|celular)/i.test(cleanKey)) {
+            contact.phone = contact.phone || val;
+        } else if (/^(job_?title|cargo|puesto)/i.test(cleanKey)) {
+            contact.jobTitle = contact.jobTitle || val;
+        } else if (/^(company|empresa)/i.test(cleanKey)) {
+            contact.company = contact.company || val;
+        } else {
+            contact[cleanKey] = contact[cleanKey] ?? val;
+        }
+    }
+
+    return { contact: contact as { email: string; [key: string]: any }, utm, context };
+}
+
+/**
  * FEATURE #2: Captura de Envíos de Formularios Wix y Atribución UTM
- * Registra o actualiza el lead en HubSpot preservando parámetros de campaña y contexto.
+ * Registra o actualiza el lead en HubSpot preservando parámetros de campaña, contexto y mapeo de campos.
  */
 export async function processWixFormSubmission(
     wixInstanceId: string,
@@ -475,6 +537,7 @@ export async function processWixFormSubmission(
     }
 
     const accessToken = await getValidHubspotToken(wixInstanceId);
+    const mappings = await getActiveMappings(wixInstanceId, 'wix_to_hs');
 
     const properties: Record<string, any> = {
         email: formData.contact.email.trim().toLowerCase(),
@@ -482,6 +545,14 @@ export async function processWixFormSubmission(
     if (formData.contact.firstName) properties.firstname = formData.contact.firstName.trim();
     if (formData.contact.lastName) properties.lastname = formData.contact.lastName.trim();
     if (formData.contact.phone) properties.phone = formData.contact.phone.trim();
+
+    // Aplicar también las reglas dinámicas de Field Mapping para custom fields enviados en el formulario
+    for (const m of mappings) {
+        const val = extractWixValue(formData.contact, m.wix_field);
+        if (val !== undefined && val !== null && val !== '') {
+            properties[m.hubspot_field] = applyTransform(val, m.transform);
+        }
+    }
 
     const availableProps = await getHubspotContactProperties(wixInstanceId).catch(() => []);
     const propSet = new Set(availableProps.map((p) => p.name));
