@@ -690,6 +690,31 @@ app.get(['/', '/dashboard'], async (req, res) => {
     input:checked + .slider:before { transform: translateX(18px); }
     .sync-btn-group { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
     .sync-btn-group .btn { flex: 1; padding: 8px 10px; font-size: 12px; text-align: center; }
+    .form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .live-sync-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
+
+    @media (max-width: 768px) {
+      body { padding: 12px; }
+      .container { gap: 16px; }
+      .card { padding: 16px; }
+      .header { flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; }
+      .header h1 { font-size: 20px; }
+      #connection-controls { width: 100%; flex-wrap: wrap; justify-content: space-between; }
+      #mappings-table thead { display: none; }
+      #mappings-table, #mappings-table tbody, #mappings-table tr, #mappings-table td { display: block; width: 100%; }
+      #mappings-table tr { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: #f8fafc; }
+      #mappings-table td { border-bottom: none; padding: 6px 0; }
+      #mappings-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+      #mappings-table td:last-child { text-align: right; padding-top: 8px; }
+      .table-actions { flex-direction: column; gap: 10px; }
+      .table-actions .btn { width: 100%; text-align: center; }
+      .grid-2 { grid-template-columns: 1fr; gap: 16px; }
+      .form-row { flex-direction: column; }
+      .live-sync-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+      .sync-btn-group { flex-direction: column; }
+      .sync-btn-group .btn { width: 100%; }
+      .log-item { flex-direction: column; gap: 4px; word-break: break-word; }
+    }
   </style>
 </head>
 <body>
@@ -763,7 +788,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
         <!-- Tab 1: Wix -> HubSpot Contact Sync -->
         <div id="tab-contact">
           <form id="form-contact-sync" onsubmit="submitContactSync(event)">
-            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <div class="form-row">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">Wix Contact ID:</label>
                 <input type="text" id="sync-wix-id" value="wix_user_101" required>
@@ -774,7 +799,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
               </div>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <div class="form-row">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">First Name:</label>
                 <input type="text" id="sync-first" value="Alex">
@@ -785,7 +810,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
               </div>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <div class="form-row" style="margin-bottom: 12px;">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">Phone:</label>
                 <input type="text" id="sync-phone" value="+15551234567">
@@ -803,7 +828,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
         <!-- Tab 2: HubSpot -> Wix Inbound Sync -->
         <div id="tab-hs" style="display: none;">
           <form id="form-hs-sync" onsubmit="submitHubspotToWix(event)">
-            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <div class="form-row">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">HubSpot Contact ID:</label>
                 <input type="text" id="hs-contact-id" placeholder="e.g. 101" value="501" required>
@@ -814,7 +839,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
               </div>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <div class="form-row" style="margin-bottom: 12px;">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">First Name (firstname):</label>
                 <input type="text" id="hs-first" value="Alex">
@@ -832,7 +857,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
         <!-- Tab 3: Form Simulator (UTMs) -->
         <div id="tab-form" style="display: none;">
           <form id="form-lead-test" onsubmit="submitLead(event)">
-            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <div class="form-row">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">Email:</label>
                 <input type="email" id="lead-email" value="lead.test@example.com" required>
@@ -842,7 +867,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
                 <input type="text" id="lead-jobtitle" value="Marketing Director">
               </div>
             </div>
-            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <div class="form-row">
               <div style="flex: 1;">
                 <label style="font-size: 12px; font-weight: 600;">First Name:</label>
                 <input type="text" id="lead-first" value="Carlos">
@@ -854,12 +879,12 @@ app.get(['/', '/dashboard'], async (req, res) => {
             </div>
             <div style="margin-bottom: 8px;">
               <label style="font-size: 12px; font-weight: 600;">UTM Attribution (Source / Medium / Campaign / Term / Content):</label>
-              <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+              <div class="form-row" style="gap: 6px; margin-bottom: 6px;">
                 <input type="text" id="lead-utm-source" placeholder="utm_source" value="google">
                 <input type="text" id="lead-utm-medium" placeholder="utm_medium" value="cpc">
                 <input type="text" id="lead-utm-campaign" placeholder="utm_campaign" value="summer_promo">
               </div>
-              <div style="display: flex; gap: 6px;">
+              <div class="form-row" style="gap: 6px; margin-bottom: 0;">
                 <input type="text" id="lead-utm-term" placeholder="utm_term" value="crm_sync">
                 <input type="text" id="lead-utm-content" placeholder="utm_content" value="hero_banner">
                 <input type="text" id="lead-referrer" placeholder="referrer" value="https://www.google.com">
@@ -872,7 +897,7 @@ app.get(['/', '/dashboard'], async (req, res) => {
 
       <!-- Section 3: Live Contact Sync & Observability Logs -->
       <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px;">
+        <div class="live-sync-header">
           <h2 style="margin: 0; border: none; padding: 0;">Live Sync & Anti-Loop Logs</h2>
           <div class="toggle-wrap">
             <span id="autosync-label">Auto-Sync (10s): OFF</span>
@@ -1102,16 +1127,16 @@ app.get(['/', '/dashboard'], async (req, res) => {
       hsSelectHtml += '</select>';
 
       tr.innerHTML = \`
-        <td>\${wixSelectHtml}</td>
-        <td>\${hsSelectHtml}</td>
-        <td>
+        <td data-label="Wix Field">\${wixSelectHtml}</td>
+        <td data-label="HubSpot Property">\${hsSelectHtml}</td>
+        <td data-label="Direction">
           <select class="direction">
             <option value="bi" \${direction === 'bi' ? 'selected' : ''}>Bidirectional (Wix ↔ HubSpot)</option>
             <option value="wix_to_hs" \${direction === 'wix_to_hs' ? 'selected' : ''}>Wix → HubSpot</option>
             <option value="hs_to_wix" \${direction === 'hs_to_wix' ? 'selected' : ''}>HubSpot → Wix</option>
           </select>
         </td>
-        <td>
+        <td data-label="Transformation">
           <select class="transform">
             <option value="none" \${transform === 'none' ? 'selected' : ''}>None</option>
             <option value="trim" \${transform === 'trim' ? 'selected' : ''}>Trim</option>
